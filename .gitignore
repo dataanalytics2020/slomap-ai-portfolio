@@ -1,10 +1,57 @@
 # macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
 
 # 一時ファイル
 *.tmp
 *.bak
+*.swp
+*.swo
+*~
 
 # IDE
 .vscode/
 .idea/
+*.iml
+.cursor/
+
+# 環境変数（機密情報）
+.env
+.env.local
+.env.*.local
+
+# ログファイル
+*.log
+logs/
+npm-debug.log*
+
+# 依存関係
+node_modules/
+.pnp/
+.pnp.js
+
+# ビルド成果物
+.next/
+out/
+dist/
+build/
+
+# キャッシュ
+.cache/
+.turbo/
+.vercel/
+
+# テストカバレッジ
+coverage/
+.nyc_output/
+
+# 本番用の画像・動画（サイズ大）
+SCREENSHOTS/*.mp4
+DATABASE_DIAGRAMS/*.mp4
+METRICS/*.mp4
+
+# バックアップ
+*.backup
+backup/
