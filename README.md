@@ -23,13 +23,21 @@
 
 ## 🏆 主な成果（定量的）
 
-### パフォーマンス
+### パフォーマンス最適化
+- **sitemap.xml生成**: 30秒 → 5.14秒（**81%改善**、98%クエリ削減）
+  - 116回の逐次クエリ → 2回の単一クエリに最適化
+  - PostgreSQL ORDER BY + JavaScript重複排除で9,304 URL高速生成
+  - Google Crawlerのタイムアウトリスク完全解消
 - **Lighthouse Score**: モバイル 95/100、デスクトップ 98/100
 - **Core Web Vitals**: LCP 1.2s、FID 50ms、CLS 0.05
 - **初回表示時間**: 1.5秒以下（Next.js SSR + ISR最適化）
 - **ビルド時間**: 21秒（95ページの静的生成）
 
 ### SEO・トラフィック
+- **動的メタディスクリプション**: 過去実績データ活用の3段階フォールバック実装
+  - Pattern A: 次回イベント + 過去TOP2機種実績（説得力重視）
+  - Pattern B: 初回開催イベント（「初めての取材」明示でユーザー不安解消）
+  - Pattern C: 基本情報フォールバック（全ページカバー）
 - **Search Console**: リダイレクトエラー100%解消（www → non-www統一）
 - **インデックス登録**: 95ページ全て正常登録
 - **構造化データ**: Event、BreadcrumbList、FAQPage実装
@@ -39,6 +47,8 @@
 - **ESLint**: 0 errors、0 warnings
 - **自動テスト**: Chrome DevTools MCP連携で自動化
 - **プレコミット**: Husky + lint-staged で品質担保
+- **sitemap生成**: 5.14秒（9,304 URL）
+- **データベースクエリ最適化**: 98%削減実績
 
 ### データ品質
 - **Slug統合**: 4,009件 → 3,524件（485件の重複解消）
@@ -121,6 +131,112 @@ CREATE POLICY "Active events viewable"
 修正後: 3,524件（品質A評価92%）
 削減率: 12.1%
 ```
+
+### 5. sitemap.xml大規模最適化（9,304 URL高速生成）
+
+**課題**: 9,304 URLの生成に30秒（Googleクローラーのタイムアウトリスク）
+
+**最適化戦略**:
+```typescript
+// ❌ 修正前: 116回の逐次クエリ（各200-230ms）
+for (const hall of halls) {
+  const events = await supabase
+    .from('syuzai_data')
+    .select('syuzai_date')
+    .eq('store_id', hall.id)
+    .order('syuzai_date', { ascending: false })
+    .limit(1);
+}
+// 合計: 66店舗 + 50取材 = 116クエリ × 230ms ≈ 27秒
+
+// ✅ 修正後: 単一クエリ + クライアント重複排除
+const { data: allEvents } = await supabase
+  .from('syuzai_data')
+  .select('store_id, syuzai_date')
+  .lt('syuzai_date', today)  // 未来日付除外
+  .order('store_id', { ascending: true })
+  .order('syuzai_date', { ascending: false });  // PostgreSQL側で事前ソート
+
+// O(n)の重複排除（既にソート済みなので最初の出現が最新）
+const latestEventMap: Record<number, string> = {};
+allEvents.forEach(event => {
+  if (!latestEventMap[event.store_id]) {
+    latestEventMap[event.store_id] = event.syuzai_date;
+  }
+});
+```
+
+**技術的ポイント**:
+- PostgreSQL ORDER BYで事前ソート（データベース側で効率処理）
+- クライアント側で軽量な重複排除（O(n)計算量）
+- ネットワークラウンドトリップを98%削減（116回 → 2回）
+
+**成果**:
+- 生成時間: 30秒 → 5.14秒（**81%改善**）
+- クエリ数: 116回 → 2回（**98%削減**）
+- スケーラビリティ: URL数が2倍（18,608件）になっても10秒以内で対応可能
+- Google Crawlerのタイムアウトリスク完全解消
+
+### 6. 動的メタディスクリプション生成システム
+
+**課題**: 静的なメタ情報ではSEO効果が限定的、クリック率（CTR）向上が必要
+
+**実装**: 3段階フォールバック戦略
+```typescript
+// 店舗詳細ページ: src/app/halls/[dmm_id]/page.tsx
+async function generateEnhancedDescription(hallData, events) {
+  const nextEvent = getNextPriorityEvent(events);  // ランク優先度（S > A > B > C > D）
+
+  // Pattern A: 過去実績あり（最も説得力が高い）
+  if (nextEvent) {
+    const pastPerf = await getPastEventPerformance(dmm_id, nextEvent.event_name);
+    if (pastPerf.length > 0) {
+      return `${hallData.name}で${nextEvent.syuzai_name}開催！過去実績：` +
+        `${pastPerf[0].machineName}平均+${pastPerf[0].avgDiff}枚（${pastPerf[0].distributionType}）、` +
+        `${pastPerf[1].machineName}平均+${pastPerf[1].avgDiff}枚。詳細な出玉データと攻略情報を今すぐチェック！`;
+    }
+
+    // Pattern B: 初回開催（ユーザーの不安を解消）
+    return `${hallData.name}で${nextEvent.syuzai_name}が初めて開催されます！` +
+      `取材イベント詳細、機種情報、アクセス方法をチェック。`;
+  }
+
+  // Pattern C: 基本情報（全ページカバー）
+  return `${hallData.name}（${hallData.prefecture}${hallData.city}）の店舗情報。` +
+    `パチンコ${hallData.pachinko_machines}台、スロット${hallData.slot_machines}台。`;
+}
+```
+
+**ランク優先度システム**:
+```typescript
+const RANK_PRIORITY: Record<string, number> = {
+  'S': 1,  // 最優先（最高ランク）
+  'A': 2,
+  'B': 3,
+  'C': 4,
+  'D': 5,
+  'その他': 99,
+};
+
+function getNextPriorityEvent(events) {
+  // ナビ子・ホールナビを除外（取材強度が弱い）
+  const filtered = events.filter(e =>
+    !e.media_name.includes('ナビ子') &&
+    !e.media_name.includes('ホールナビ')
+  );
+
+  // ランク優先度でソート
+  return filtered.sort((a, b) =>
+    RANK_PRIORITY[a.syuzai_rank] - RANK_PRIORITY[b.syuzai_rank]
+  )[0];
+}
+```
+
+**成果**:
+- SEO最適化: 実績データで説得力向上、検索結果での差別化
+- ユーザー体験: 具体的な期待値（平均差枚、機種名）を事前提示
+- メンテナンス性: 自動生成で更新コスト0、常に最新情報
+- 3段階フォールバック: 全ページで適切なメタ情報を担保
 
 ## 🛠️ 技術スタック詳細
 
@@ -386,20 +502,15 @@ HTTP/2 200  # ✅ 直接応答
 
 ## 🎨 スクリーンショット
 
-### デスクトップビュー
-![Desktop View](./SCREENSHOTS/desktop-view.png)
+### トップページ
+![Top Screen](./SCREENSHOTS/top_screen.png)
 
-*メインページ - グラスモーフィズムデザイン + 現在地検索*
+*メインページ - グラスモーフィズムデザイン + 取材イベント一覧表示*
 
-### モバイルレスポンシブ
-![Mobile Responsive](./SCREENSHOTS/mobile-responsive.png)
+### 地図検索機能
+![Map Search](./SCREENSHOTS/map_image.png)
 
-*375px幅での表示 - Chrome DevTools MCPで自動検証*
-
-### デザインシステム
-![Glassmorphism Design](./SCREENSHOTS/glassmorphism-design.png)
-
-*floating-heavy統一デザイン（24px blur）*
+*現在地ベースの店舗検索 - Haversine距離計算による近隣店舗表示*
 
 ## 📞 Contact
 
